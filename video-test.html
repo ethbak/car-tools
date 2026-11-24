@@ -21,14 +21,15 @@
 <pre id="out"></pre>
 <script>
 // Measures how well this browser plays H.264 at the resolutions streaming sites use, and reports the
-// results to the ntfy topic given as #t=<topic> in the link (kept out of the published page).
+// results to ntfy: the topic in #t=<topic> if the link has one, otherwise this page's own topic. The
+// report holds only playback numbers, the browser's user agent and GPU name, so a public topic is fine.
 const clips = [
   { file: "clips/h264-480p30.mp4", width: 854, height: 480, fps: 30, bitrate: 1500000 },
   { file: "clips/h264-720p30.mp4", width: 1280, height: 720, fps: 30, bitrate: 3000000 },
   { file: "clips/h264-1080p30.mp4", width: 1920, height: 1080, fps: 30, bitrate: 6000000 },
   { file: "clips/h264-1080p60.mp4", width: 1920, height: 1080, fps: 60, bitrate: 8000000 },
 ];
-const topic = new URLSearchParams(location.hash.slice(1)).get("t");
+const topic = new URLSearchParams(location.hash.slice(1)).get("t") || "ethbak-car-video-83b31f50";
 const $ = id => document.getElementById(id);
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const show = r => { $("out").textContent = JSON.stringify(r, null, 2); };
@@ -116,7 +117,6 @@ $("start").onclick = async () => {
     show(r);
   }
   $("v").removeAttribute("src");
-  if (!topic) { $("status").textContent = "Done. No report topic in the link, so nothing was sent."; return; }
   try {
     const res = await fetch("https://ntfy.sh/" + encodeURIComponent(topic), {
       method: "POST", body: JSON.stringify(r), headers: { Title: "Car video test" } });
