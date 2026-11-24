@@ -1,0 +1,11 @@
+{
+  "enabled": true,
+  "startHeight": 540,
+  "maxHeight": 0,
+  "minHeight": 0,
+  "tolerance": 0.05,
+  "windowSeconds": 20,
+  "retestDays": 3,
+  "report": true,
+  "reportMinutes": 10
+}
