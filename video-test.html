@@ -1,0 +1,127 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Video test</title>
+<style>
+  :root { color-scheme: dark; --bg: #111; --fg: #eee; --muted: #9aa; --accent: #3b82f6; }
+  body { margin: 0; background: var(--bg); color: var(--fg); font: 24px system-ui, sans-serif; }
+  header { display: flex; gap: 24px; align-items: center; padding: 16px; }
+  button { font: inherit; padding: 16px 32px; border: 0; border-radius: 12px; background: var(--accent); color: #fff; }
+  button:disabled { opacity: .5; }
+  button:focus-visible { outline: 3px solid #fff; outline-offset: 3px; }
+  #status { color: var(--muted); }
+  video { display: block; width: 100%; max-height: 70vh; background: #000; }
+  pre { margin: 0; padding: 16px; font-size: 18px; white-space: pre-wrap; }
+</style>
+<header>
+  <button id="start">Start test</button>
+  <span id="status">Takes about a minute. Plays four silent test clips.</span>
+</header>
+<video id="v" muted playsinline></video>
+<pre id="out"></pre>
+<script>
+// Measures how well this browser plays H.264 at the resolutions streaming sites use, and reports the
+// results to the ntfy topic given as #t=<topic> in the link (kept out of the published page).
+const clips = [
+  { file: "clips/h264-480p30.mp4", width: 854, height: 480, fps: 30, bitrate: 1500000 },
+  { file: "clips/h264-720p30.mp4", width: 1280, height: 720, fps: 30, bitrate: 3000000 },
+  { file: "clips/h264-1080p30.mp4", width: 1920, height: 1080, fps: 30, bitrate: 6000000 },
+  { file: "clips/h264-1080p60.mp4", width: 1920, height: 1080, fps: 60, bitrate: 8000000 },
+];
+const topic = new URLSearchParams(location.hash.slice(1)).get("t");
+const $ = id => document.getElementById(id);
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+const show = r => { $("out").textContent = JSON.stringify(r, null, 2); };
+
+function webgl() {
+  const out = {};
+  for (const kind of ["webgl2", "webgl"]) {
+    const gl = document.createElement("canvas").getContext(kind);
+    if (!gl) { out[kind] = null; continue; }
+    const dbg = gl.getExtension("WEBGL_debug_renderer_info");
+    out[kind] = {
+      vendor: gl.getParameter(dbg ? dbg.UNMASKED_VENDOR_WEBGL : gl.VENDOR),
+      renderer: gl.getParameter(dbg ? dbg.UNMASKED_RENDERER_WEBGL : gl.RENDERER),
+      version: gl.getParameter(gl.VERSION),
+    };
+  }
+  return out;
+}
+
+async function widevine() {
+  const out = {};
+  // HW_SECURE_ALL is Widevine L1 (HD on most services); SW_SECURE_CRYPTO is L3.
+  for (const robustness of ["HW_SECURE_ALL", "HW_SECURE_DECODE", "SW_SECURE_DECODE", "SW_SECURE_CRYPTO"]) {
+    try {
+      await navigator.requestMediaKeySystemAccess("com.widevine.alpha", [{
+        initDataTypes: ["cenc"],
+        videoCapabilities: [{ contentType: 'video/mp4; codecs="avc1.640028"', robustness }],
+      }]);
+      out[robustness] = "yes";
+    } catch (e) { out[robustness] = "no (" + e.name + ")"; }
+  }
+  return out;
+}
+
+async function capabilities(c) {
+  if (!navigator.mediaCapabilities) return "no mediaCapabilities";
+  try {
+    const r = await navigator.mediaCapabilities.decodingInfo({ type: "file", video: {
+      contentType: 'video/mp4; codecs="avc1.640028"', width: c.width, height: c.height, bitrate: c.bitrate, framerate: c.fps } });
+    return { supported: r.supported, smooth: r.smooth, powerEfficient: r.powerEfficient };
+  } catch (e) { return "error " + e.name; }
+}
+
+async function playClip(c) {
+  const v = $("v");
+  v.src = c.file;
+  await new Promise((ok, fail) => { v.oncanplaythrough = ok; v.onerror = () => fail(new Error("load failed")); v.load(); });
+  await v.play();
+  await sleep(2000);
+  const q0 = v.getVideoPlaybackQuality();
+  let raf = 0, rvfc = 0, run = true;
+  const tick = () => { raf++; if (run) requestAnimationFrame(tick); };
+  requestAnimationFrame(tick);
+  if (v.requestVideoFrameCallback) { const f = () => { rvfc++; if (run) v.requestVideoFrameCallback(f); }; v.requestVideoFrameCallback(f); }
+  const t0 = performance.now();
+  await sleep(10000);
+  run = false;
+  const secs = (performance.now() - t0) / 1000;
+  const q1 = v.getVideoPlaybackQuality();
+  v.pause();
+  const total = q1.totalVideoFrames - q0.totalVideoFrames, dropped = q1.droppedVideoFrames - q0.droppedVideoFrames;
+  return {
+    expectedFrames: Math.round(c.fps * secs),
+    decodedFrames: total,
+    droppedFrames: dropped,
+    droppedPercent: total ? +(100 * dropped / total).toFixed(1) : null,
+    presentedFps: v.requestVideoFrameCallback ? +(rvfc / secs).toFixed(1) : "n/a",
+    pageFps: +(raf / secs).toFixed(1),
+  };
+}
+
+$("start").onclick = async () => {
+  $("start").disabled = true;
+  const r = {
+    when: new Date().toISOString(), userAgent: navigator.userAgent,
+    screen: `${screen.width}x${screen.height}`, viewport: `${innerWidth}x${innerHeight}`, devicePixelRatio,
+    webgl: webgl(), widevine: await widevine(), clips: {},
+  };
+  show(r);
+  for (const c of clips) {
+    const name = c.file.split("/").pop().replace(".mp4", "");
+    $("status").textContent = "Playing " + name + "…";
+    try { r.clips[name] = { capabilities: await capabilities(c), playback: await playClip(c) }; }
+    catch (e) { r.clips[name] = { error: String(e) }; }
+    show(r);
+  }
+  $("v").removeAttribute("src");
+  if (!topic) { $("status").textContent = "Done. No report topic in the link, so nothing was sent."; return; }
+  try {
+    const res = await fetch("https://ntfy.sh/" + encodeURIComponent(topic), {
+      method: "POST", body: JSON.stringify(r), headers: { Title: "Car video test" } });
+    $("status").textContent = res.ok ? "Done. Results sent." : "Done, but sending failed (" + res.status + ").";
+  } catch (e) { $("status").textContent = "Done, but sending failed: " + e.message; }
+  $("start").disabled = false;
+};
+</script>
